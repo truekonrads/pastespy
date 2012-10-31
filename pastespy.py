@@ -3,7 +3,7 @@ from twisted.python import log
 from twisted.internet import reactor,defer
 from twisted.web.client import HTTPConnectionPool
 pool = HTTPConnectionPool(reactor, persistent=True)
-pool.maxPersistentPerHost = 5
+pool.maxPersistentPerHost = 1
 from treq import get
 import sys,re
 from lib.pastebin import parsePastebinArchive, parsePastebinIndividualPaste
