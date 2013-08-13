@@ -1,7 +1,7 @@
 #!/usr/bin/python
 from twisted.python import log
 import logging
-import treq,txmongo
+import treq,txmongo,datetime
 from twisted.internet import reactor,defer
 from twisted.web.client import HTTPConnectionPool
 pool = HTTPConnectionPool(reactor, persistent=True)
@@ -11,7 +11,7 @@ import sys,re
 from lib.pastebin import parsePastebinArchive, parsePastebinIndividualPaste
 from lib.hashfinder import findHashesInRawPaste
 log.startLogging(sys.stdout)
-from twisted.internet.task import LoopingCall
+from twisted.internet.task import LoopingCall, deferLater
 
 def singleton(cls):
     instances = {}
@@ -68,15 +68,19 @@ def handleIndividualPaste(dd,pasteID):
 		except (UnicodeDecodeError,UnicodeEncodeError), e:
 			log.msg("The type of rawPageResponse[1] is %s" % str(type(rawPageResponse[1])))
 			log.msg(str(e))
+			raise e
 		try:
 			pageDetails['snippet']=rawPaste.split("\n")[0]
 			fixedPasteDetails={}
 			for (k,v) in pageDetails.items():
-				fixedPasteDetails[k]=v.decode('utf8','ignore')
+				fixedPasteDetails[k]=v.encode('utf8','ignore')
 		except (UnicodeDecodeError,UnicodeEncodeError), e:
 			log.msg("The type of v for key %s  is %s" % (k,str(type(v))))
 			log.msg(str(e))
-			
+			raise e
+		for k in "author date title snippet".split(" "):
+		    if not fixedPasteDetails.has_key(k):
+			fixedPasteDetails[k]='__Unknown__'
 		log.msg("%(author)s on %(date)s posted the following about `%(title)s': %(snippet)s" % fixedPasteDetails)
 		hashwords=findHashesInRawPaste(rawPaste,["confident"])		
 		for h in hashwords:
@@ -104,23 +108,25 @@ class MongoPool:
 		self._connection=None
 	
 	def getMongoConnection(self):
-		if klass.instance()._connection:
+		if self._connection:
 			log.msg("Returning an existing Mongo connection",logLevel=logging.DEBUG)
-			return defer.succeed(_connection)
+			return defer.succeed(self._connection)
 		else:
 			d=txmongo.MongoConnection()
-			return d.addCallback(klass.intance().storeMongoConnection)
+			return d.addCallback(self.storeMongoConnection)
 
 	def storeMongoConnection(self,cnx):
 		self._connection=cnx	
 		return defer.succeed(self._connection)
 
 def runIteration():
-	d=semaphoreGet('http://pastebin.com/archive')
-	d.addCallback(handleArchivePage)
-	d.addErrback(log.err)
-	return d
+    now=datetime.datetime.now()
+    d=semaphoreGet('http://pastebin.com/archive')
+    d.addCallback(handleArchivePage)
+    d.addCallback(lambda _: log.msg("Done with current iteration"))
+    d.addErrback(log.err)
+    d.addBoth(lambda x:deferLater(reactor,60,runIteration))
+    return d
 	#d.addBoth(lambda x: reactor.stop())
-loop=LoopingCall(runIteration)
-loop.start(20,now=True)
+runIteration()
 reactor.run() 
