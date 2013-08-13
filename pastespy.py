@@ -13,6 +13,14 @@ from lib.hashfinder import findHashesInRawPaste
 log.startLogging(sys.stdout)
 from twisted.internet.task import LoopingCall
 
+def singleton(cls):
+    instances = {}
+    def getinstance():
+        if cls not in instances:
+            instances[cls] = cls()
+        return instances[cls]
+    return getinstance
+
 class DoghouseException(Exception):
 	pass
 semaphore=defer.DeferredSemaphore(5)
@@ -44,8 +52,8 @@ def getIndividualPastes(uniqueList):
 	pages=[]
 	log.msg("Fetching %i unique pastes" % len(uniqueList))
 	for pasteID in uniqueList:
-		fullPageDeferred=semaphoreGet("http://pastebin.com/%s" % pasteID).addCallback(treq.content)
-		rawDeferred=semaphoreGet("http://pastebin.com/raw.php?i=%s" % pasteID).addCallback(treq.content)
+		fullPageDeferred=semaphoreGet("http://pastebin.com/%s" % pasteID.encode('utf8')).addCallback(treq.content)
+		rawDeferred=semaphoreGet("http://pastebin.com/raw.php?i=%s" % pasteID.encode('utf8')).addCallback(treq.content)
 		d=defer.DeferredList([fullPageDeferred,rawDeferred]).addCallback(handleIndividualPaste,pasteID)
 		pages.append(d)	
 	return defer.DeferredList(pages)
@@ -56,12 +64,17 @@ def handleIndividualPaste(dd,pasteID):
 	if fullPageResponse[0] and rawPageResponse[0]:
 		pageDetails=parsePastebinIndividualPaste(fullPageResponse[1])
 		try:
-			rawPaste=rawPageResponse[1].encode('utf8','ignore')
+			rawPaste=rawPageResponse[1].decode('utf8','ignore')
+		except (UnicodeDecodeError,UnicodeEncodeError), e:
+			log.msg("The type of rawPageResponse[1] is %s" % str(type(rawPageResponse[1])))
+			log.msg(str(e))
+		try:
 			pageDetails['snippet']=rawPaste.split("\n")[0]
 			fixedPasteDetails={}
 			for (k,v) in pageDetails.items():
-				fixedPasteDetails[k]=v.encode('utf8','ignore')
+				fixedPasteDetails[k]=v.decode('utf8','ignore')
 		except (UnicodeDecodeError,UnicodeEncodeError), e:
+			log.msg("The type of v for key %s  is %s" % (k,str(type(v))))
 			log.msg(str(e))
 			
 		log.msg("%(author)s on %(date)s posted the following about `%(title)s': %(snippet)s" % fixedPasteDetails)
@@ -72,7 +85,7 @@ def handleIndividualPaste(dd,pasteID):
 
 def findUniquePastes(archiveList):
 	query={'pasteID' : { '$in' : archiveList}}
-	d=getMongoConnection().addCallback(lambda cnx: cnx.pastebin.pastes.find(query,fields=['pasteID']))
+	d=MongoPool().getMongoConnection().addCallback(lambda cnx: cnx.pastebin.pastes.find(query,fields=['pasteID']))
 	d.addCallback(lambda res: set(archiveList) - set([x["pasteID"] for x in res]))
 	return d
 	
@@ -81,21 +94,26 @@ def storePaste(pasteID,details,raw,hashwords):
 	data['pasteID']=pasteID
 	data['raw']=raw
 	data['hashwords']=hashwords
-	d=getMongoConnection()
+	d=MongoPool().getMongoConnection()
 	return d.addCallback(lambda cnx: cnx.pastebin.pastes.insert(data))
 
-_connection=None
-def getMongoConnection():
-	if _connection:
-		log.msg("Returning an existing Mongo connection",logLevel=logging.DEBUG)
-		return defer.succeed(_connection)
-	else:
-		d=txmongo.MongoConnection()
-		return d.addCallback(storeMongoConnection)
+@singleton
+class MongoPool:
+	_instance=None
+	def __init__(self):
+		self._connection=None
+	
+	def getMongoConnection(self):
+		if klass.instance()._connection:
+			log.msg("Returning an existing Mongo connection",logLevel=logging.DEBUG)
+			return defer.succeed(_connection)
+		else:
+			d=txmongo.MongoConnection()
+			return d.addCallback(klass.intance().storeMongoConnection)
 
-def storeMongoConnection(cnx):
-	_connection=cnx
-	return defer.succeed(_connection)
+	def storeMongoConnection(self,cnx):
+		self._connection=cnx	
+		return defer.succeed(self._connection)
 
 def runIteration():
 	d=semaphoreGet('http://pastebin.com/archive')
