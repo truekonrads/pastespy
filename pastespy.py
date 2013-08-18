@@ -7,7 +7,7 @@ from twisted.web.client import HTTPConnectionPool
 pool = HTTPConnectionPool(reactor, persistent=True)
 pool.maxPersistentPerHost = 1
 from treq import get
-import sys,re
+import sys,re,itertools
 from lib.pastebin import parsePastebinArchive, parsePastebinIndividualPaste
 from lib.hashfinder import findHashesInRawPaste
 log.startLogging(sys.stdout)
@@ -21,12 +21,14 @@ def singleton(cls):
         return instances[cls]
     return getinstance
 
+IPADDRS=itertools.cycle([None])
+CURRENTIP=None
 class DoghouseException(Exception):
 	pass
 semaphore=defer.DeferredSemaphore(5)
 def semaphoreGet(*args,**kwargs):
-
-	d=semaphore.acquire().addCallback(lambda x: get(*args,**kwargs)).addCallback(semaphoreGetContinue)
+        kwargs['bindAddress']=CURRENTIP
+	d=semaphore.acquire().addCallback(lambda x: get(*args,**kwargs)).addBoth(semaphoreGetContinue)
 	return d
 
 def semaphoreGetContinue(d):
@@ -37,6 +39,8 @@ def handleArchivePage(response):
 	log.msg( "Archive page code is %s" % response.code)
 	if response.code !=200:
 		log.msg("Oh oh - looks like we're in the doghouse")
+		CURRENTIP=next(IPADDRS)
+		log.msg("Switching IP to %s" % CURRENTIP)
 		raise DoghouseException("Couldn't get archive - code was %i" % response.code)
 	d=treq.content(response).addCallback(parseArchiveResults)
 	return d
@@ -128,5 +132,12 @@ def runIteration():
     d.addBoth(lambda x:deferLater(reactor,60,runIteration))
     return d
 	#d.addBoth(lambda x: reactor.stop())
-runIteration()
-reactor.run() 
+	
+def main():
+    if len(sys.argv)>1:
+	IPADDRS=itertools.cycle(sys.argv[1:])
+    runIteration()
+    reactor.run()     
+if __name__=="__main__":
+    main()
+
