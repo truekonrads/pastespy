@@ -21,26 +21,26 @@ def singleton(cls):
         return instances[cls]
     return getinstance
 
-IPADDRS=itertools.cycle([None])
+IPADDRS=itertools.cycle(['0.0.0.0'])
 CURRENTIP=None
 class DoghouseException(Exception):
 	pass
+
 semaphore=defer.DeferredSemaphore(5)
+
 def semaphoreGet(*args,**kwargs):
         kwargs['bindAddress']=CURRENTIP
-	d=semaphore.acquire().addCallback(lambda x: get(*args,**kwargs)).addBoth(semaphoreGetContinue)
-	return d
-
-def semaphoreGetContinue(d):
-	semaphore.release()
+        nargs=[get]
+        nargs.extend(args)
+	d=semaphore.run(*nargs,**kwargs)
 	return d
 
 def handleArchivePage(response):
 	log.msg( "Archive page code is %s" % response.code)
-	if response.code !=200:
+	if response.code ==403:
 		log.msg("Oh oh - looks like we're in the doghouse")
 		CURRENTIP=next(IPADDRS)
-		log.msg("Switching IP to %s" % CURRENTIP)
+		log.msg("Switching IP to %s" % str(CURRENTIP))
 		raise DoghouseException("Couldn't get archive - code was %i" % response.code)
 	d=treq.content(response).addCallback(parseArchiveResults)
 	return d
@@ -128,16 +128,26 @@ def runIteration():
     d=semaphoreGet('http://pastebin.com/archive')
     d.addCallback(handleArchivePage)
     d.addCallback(lambda _: log.msg("Done with current iteration"))
-    d.addErrback(log.err)
-    d.addBoth(lambda x:deferLater(reactor,60,runIteration))
+    d.addErrback(log.err,'from runIteration')
+    #d.addBoth(lambda x:deferLater(reactor,60,runIteration))
+    d.addBoth(sleepAndRun)
     return d
 	#d.addBoth(lambda x: reactor.stop())
-	
+
+def sleepAndRun(d):
+    reactor.callLater(60,runIteration)
+
 def main():
     if len(sys.argv)>1:
+	global IPADDRS
+	global CURRENTIP
 	IPADDRS=itertools.cycle(sys.argv[1:])
+        log.msg("Got %i IP adresses to cycle: %s" % (len(sys.argv[1:]),str(sys.argv[1:])))
+        CURRENTIP=next(IPADDRS)
+        log.msg("Using IP address %s" % str(CURRENTIP))
     runIteration()
     reactor.run()     
+
 if __name__=="__main__":
     main()
 
