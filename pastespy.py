@@ -29,20 +29,25 @@ class DoghouseException(Exception):
 semaphore=defer.DeferredSemaphore(5)
 
 def semaphoreGet(*args,**kwargs):
-        kwargs['bindAddress']=CURRENTIP
-        nargs=[get]
-        nargs.extend(args)
-	d=semaphore.run(*nargs,**kwargs)
+        global CURRENTIP
+        log.msg("Getting a semaphore.... BA: '%s'" % CURRENTIP)
+#	d=semaphore.run(get,*args,bindAddress=CURRENTIP,**kwargs)
+        d=get(*args, bindAddress=CURRENTIP, **kwargs)
 	return d
 
 def handleArchivePage(response):
+        global CURRENTIP
 	log.msg( "Archive page code is %s" % response.code)
 	if response.code ==403:
 		log.msg("Oh oh - looks like we're in the doghouse")
 		CURRENTIP=next(IPADDRS)
 		log.msg("Switching IP to %s" % str(CURRENTIP))
-		raise DoghouseException("Couldn't get archive - code was %i" % response.code)
-	d=treq.content(response).addCallback(parseArchiveResults)
+#		raise DoghouseException("Couldn't get archive - code was %i" % response.code)
+                # treq seems to "block" if you don't fetch the content
+                return treq.content(response)
+#                return defer.succeed(False)
+	else:
+                d=treq.content(response).addCallback(parseArchiveResults)
 	return d
 
 def parseArchiveResults(text):
@@ -134,8 +139,9 @@ def runIteration():
     return d
 	#d.addBoth(lambda x: reactor.stop())
 
-def sleepAndRun(d):
-    reactor.callLater(60,runIteration)
+def sleepAndRun(d,length=60):
+    log.msg("Sleeping %i seconds" % length)
+    reactor.callLater(length,runIteration)
 
 def main():
     if len(sys.argv)>1:
